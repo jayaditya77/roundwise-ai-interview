@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field
 # Configuration
 # =========================================================
 
-OLLAMA_URL = "http://localhost:11434"
+import os
+
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
 # Fast local model
 LLM_MODEL = "gemma3:1b"
