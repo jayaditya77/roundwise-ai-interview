@@ -80,7 +80,10 @@ def chat(
                 "temperature": temperature,
                 "max_output_tokens": num_predict,
                 "response_mime_type": "application/json",
-                "response_schema": output_schema,
+
+                # Use response_json_schema instead of response_schema.
+                # This avoids the additional_properties conversion issue.
+                "response_json_schema": output_schema,
             },
         )
 
@@ -116,28 +119,21 @@ def chat(
 
 QUESTION_SCHEMA = {
     "type": "object",
-
     "properties": {
-
         "question": {
             "type": "string",
         },
-
         "type": {
             "type": "string",
         },
-
         "expected_points": {
             "type": "array",
-
             "items": {
                 "type": "string",
             },
-
             "maxItems": 3,
         },
     },
-
     "required": [
         "question",
         "type",
@@ -152,44 +148,33 @@ QUESTION_SCHEMA = {
 
 EVALUATION_SCHEMA = {
     "type": "object",
-
     "properties": {
-
         "score": {
             "type": "integer",
             "minimum": 0,
             "maximum": 10,
         },
-
         "strengths": {
             "type": "array",
-
             "items": {
                 "type": "string",
             },
-
             "maxItems": 2,
         },
-
         "weaknesses": {
             "type": "array",
-
             "items": {
                 "type": "string",
             },
-
             "maxItems": 2,
         },
-
         "feedback": {
             "type": "string",
         },
-
         "ideal_answer": {
             "type": "string",
         },
     },
-
     "required": [
         "score",
         "strengths",
@@ -378,9 +363,6 @@ def evaluate_answer(
     request: EvaluateAnswerRequest,
 ) -> dict[str, Any]:
 
-    # Keep only the most important expected points.
-    # This keeps the prompt small and improves speed.
-
     expected_points = "; ".join(
         request.expected_points[:3]
     )
@@ -514,8 +496,6 @@ Return ONLY JSON.
         if str(item).strip()
     ]
 
-    # Fallback if Gemini returns an empty list.
-
     if not strengths:
         strengths = [
             "Shows understanding of the main concept.",
@@ -542,8 +522,6 @@ Return ONLY JSON.
         for item in weaknesses[:2]
         if str(item).strip()
     ]
-
-    # Fallback if Gemini returns an empty list.
 
     if not weaknesses:
         weaknesses = [
@@ -581,11 +559,6 @@ Return ONLY JSON.
         )
     ).strip()
 
-    # -----------------------------------------------------
-    # Detect if Gemini accidentally put JSON inside
-    # ideal_answer.
-    # -----------------------------------------------------
-
     if ideal_answer.startswith("{"):
 
         try:
@@ -597,7 +570,6 @@ Return ONLY JSON.
                 nested,
                 dict,
             ):
-
                 nested_ideal = nested.get(
                     "ideal_answer",
                     "",
@@ -611,10 +583,6 @@ Return ONLY JSON.
         except json.JSONDecodeError:
             pass
 
-    # -----------------------------------------------------
-    # Remove common accidental wording.
-    # -----------------------------------------------------
-
     if ideal_answer:
 
         ideal_answer = ideal_answer.replace(
@@ -626,10 +594,6 @@ Return ONLY JSON.
             "the question",
             request.question,
         )
-
-    # -----------------------------------------------------
-    # Final fallback if Gemini returns nothing.
-    # -----------------------------------------------------
 
     if not ideal_answer:
 
