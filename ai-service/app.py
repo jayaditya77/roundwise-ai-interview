@@ -67,42 +67,71 @@ def chat(
             detail="GEMINI_API_KEY is not configured.",
         )
 
-    try:
-        response = gemini_client.models.generate_content(
-            model=LLM_MODEL,
-            contents=prompt,
-            config={
-                "temperature": temperature,
-                "max_output_tokens": num_predict,
-                "response_mime_type": "application/json",
-                "response_json_schema": output_schema,
-            },
+    last_error = None
+
+    # Gemini can occasionally return truncated JSON even when
+    # JSON output is requested. Retry once with a safer temperature
+    # and a larger output limit.
+    for attempt in range(2):
+        current_temperature = (
+            temperature
+            if attempt == 0
+            else min(temperature, 0.2)
         )
 
-        content = response.text
+        current_max_tokens = max(
+            num_predict,
+            700,
+        )
 
-        if not content:
-            raise HTTPException(
-                status_code=502,
-                detail="Gemini returned an empty response.",
+        try:
+            response = gemini_client.models.generate_content(
+                model=LLM_MODEL,
+                contents=prompt,
+                config={
+                    "temperature": current_temperature,
+                    "max_output_tokens": current_max_tokens,
+                    "response_mime_type": "application/json",
+                    "response_json_schema": output_schema,
+                },
             )
 
-        return json.loads(content)
+            # google-genai can expose the structured response directly.
+            # Prefer it so we do not unnecessarily parse raw JSON text.
+            parsed = getattr(response, "parsed", None)
 
-    except HTTPException:
-        raise
+            if isinstance(parsed, dict):
+                return parsed
 
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Gemini returned invalid JSON: {exc}",
-        ) from exc
+            content = response.text
 
-    except Exception as exc:
+            if not content:
+                last_error = "Gemini returned an empty response."
+                continue
+
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError as exc:
+                last_error = f"Gemini returned invalid JSON: {exc}"
+
+        except HTTPException:
+            raise
+
+        except Exception as exc:
+            last_error = f"Gemini request failed: {exc}"
+
+    if last_error and last_error.startswith(
+        "Gemini request failed:"
+    ):
         raise HTTPException(
             status_code=503,
-            detail=f"Gemini request failed: {exc}",
-        ) from exc
+            detail=last_error,
+        )
+
+    raise HTTPException(
+        status_code=502,
+        detail=last_error or "Gemini returned invalid JSON.",
+    )
 
 
 # =========================================================
@@ -301,8 +330,8 @@ Return ONLY JSON.
     result = chat(
         prompt,
         QUESTION_SCHEMA,
-        temperature=0.8,
-        num_predict=350,
+        temperature=0.3,
+        num_predict=500,
     )
 
     # =====================================================
