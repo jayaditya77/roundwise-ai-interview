@@ -1,27 +1,32 @@
 import json
+import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
+
+from google import genai
+from google.genai import types
 
 
 # =========================================================
 # Configuration
 # =========================================================
 
-import os
-
-from google import genai
-from google.genai import types
-
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 if GEMINI_API_KEY:
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+else:
+    gemini_client = None
 
 LLM_MODEL = "gemini-3.1-flash-lite"
 EMBED_MODEL = "gemini-embedding-001"
 
+
+# =========================================================
+# FastAPI Application
+# =========================================================
 
 app = FastAPI(
     title="Roundwise GenAI Service",
@@ -61,7 +66,7 @@ def chat(
     num_predict: int = 300,
 ) -> dict[str, Any]:
 
-    if not GEMINI_API_KEY:
+    if not GEMINI_API_KEY or gemini_client is None:
         raise HTTPException(
             status_code=500,
             detail="GEMINI_API_KEY is not configured.",
@@ -138,8 +143,6 @@ QUESTION_SCHEMA = {
         "type",
         "expected_points",
     ],
-
-    "additionalProperties": False,
 }
 
 
@@ -194,8 +197,6 @@ EVALUATION_SCHEMA = {
         "feedback",
         "ideal_answer",
     ],
-
-    "additionalProperties": False,
 }
 
 
@@ -206,7 +207,7 @@ EVALUATION_SCHEMA = {
 @app.get("/health")
 def health() -> dict[str, Any]:
 
-    if not GEMINI_API_KEY:
+    if not GEMINI_API_KEY or gemini_client is None:
         raise HTTPException(
             status_code=500,
             detail="GEMINI_API_KEY is not configured.",
@@ -246,7 +247,6 @@ def generate_question(
     context_instruction = ""
 
     if request.context:
-
         context_instruction = f"""
 Retrieved study material:
 
@@ -319,7 +319,6 @@ Return ONLY JSON.
     ).strip()
 
     if not question:
-
         raise HTTPException(
             status_code=502,
             detail=(
@@ -340,7 +339,6 @@ Return ONLY JSON.
     ).strip()
 
     if not question_type:
-
         question_type = "technical"
 
     # =====================================================
@@ -356,7 +354,6 @@ Return ONLY JSON.
         expected_points,
         list,
     ):
-
         expected_points = []
 
     expected_points = [
@@ -367,9 +364,7 @@ Return ONLY JSON.
 
     return {
         "question": question,
-
         "type": question_type,
-
         "expected_points": expected_points,
     }
 
@@ -477,7 +472,6 @@ Return ONLY JSON.
     # =====================================================
 
     try:
-
         score = int(
             result.get(
                 "score",
@@ -489,7 +483,6 @@ Return ONLY JSON.
         TypeError,
         ValueError,
     ):
-
         score = 0
 
     score = max(
@@ -513,7 +506,6 @@ Return ONLY JSON.
         strengths,
         list,
     ):
-
         strengths = []
 
     strengths = [
@@ -525,7 +517,6 @@ Return ONLY JSON.
     # Fallback if Gemini returns an empty list.
 
     if not strengths:
-
         strengths = [
             "Shows understanding of the main concept.",
             "Provides a relevant technical explanation.",
@@ -544,7 +535,6 @@ Return ONLY JSON.
         weaknesses,
         list,
     ):
-
         weaknesses = []
 
     weaknesses = [
@@ -556,7 +546,6 @@ Return ONLY JSON.
     # Fallback if Gemini returns an empty list.
 
     if not weaknesses:
-
         weaknesses = [
             "Could provide more specific technical details.",
             "Could explain the trade-offs more clearly.",
@@ -574,7 +563,6 @@ Return ONLY JSON.
     ).strip()
 
     if not feedback:
-
         feedback = (
             "The answer demonstrates a reasonable "
             "understanding of the topic. Add more "
@@ -601,7 +589,6 @@ Return ONLY JSON.
     if ideal_answer.startswith("{"):
 
         try:
-
             nested = json.loads(
                 ideal_answer
             )
@@ -617,13 +604,11 @@ Return ONLY JSON.
                 )
 
                 if nested_ideal:
-
                     ideal_answer = str(
                         nested_ideal
                     ).strip()
 
         except json.JSONDecodeError:
-
             pass
 
     # -----------------------------------------------------
@@ -672,13 +657,9 @@ Return ONLY JSON.
 
     return {
         "score": score,
-
         "strengths": strengths,
-
         "weaknesses": weaknesses,
-
         "feedback": feedback,
-
         "ideal_answer": ideal_answer,
     }
 
@@ -692,7 +673,7 @@ def embed(
     request: EmbedRequest,
 ) -> dict[str, Any]:
 
-    if not GEMINI_API_KEY:
+    if not GEMINI_API_KEY or gemini_client is None:
         raise HTTPException(
             status_code=500,
             detail="GEMINI_API_KEY is not configured.",
