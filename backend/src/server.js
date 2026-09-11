@@ -40,6 +40,6 @@ app.use((error, req, res, next) => {
   });
 });
 
-app.listen(port, () => {
-  console.log(`Roundwise backend running on http://localhost:${port}`);
+app.listen(port, '0.0.0.0', () => {
+  console.log(`Roundwise backend running on port ${port}`);
 });
