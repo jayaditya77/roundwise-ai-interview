@@ -1,5 +1,4 @@
 import json
-import urllib.request
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -12,13 +11,16 @@ from pydantic import BaseModel, Field
 
 import os
 
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+from google import genai
+from google.genai import types
 
-# Fast local model
-LLM_MODEL = "gemma3:1b"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-# Embedding model for RAG
-EMBED_MODEL = "nomic-embed-text"
+if GEMINI_API_KEY:
+    gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+
+LLM_MODEL = "gemini-3.1-flash-lite"
+EMBED_MODEL = "gemini-embedding-001"
 
 
 app = FastAPI(
@@ -49,43 +51,6 @@ class EmbedRequest(BaseModel):
 
 
 # =========================================================
-# Ollama HTTP Helper
-# =========================================================
-
-def ollama_request(
-    path: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-
-    body = json.dumps(payload).encode("utf-8")
-
-    request = urllib.request.Request(
-        f"{OLLAMA_URL}{path}",
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-
-    try:
-        with urllib.request.urlopen(
-            request,
-            timeout=300,
-        ) as response:
-
-            raw_response = response.read().decode("utf-8")
-
-            return json.loads(raw_response)
-
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=f"Could not connect to Ollama: {exc}",
-        ) from exc
-
-
-# =========================================================
 # LLM Chat
 # =========================================================
 
@@ -96,83 +61,48 @@ def chat(
     num_predict: int = 300,
 ) -> dict[str, Any]:
 
-    last_error = None
-
-    # Gemma 1B can occasionally stop in the middle
-    # of a JSON response.
-    #
-    # Try once with the requested temperature.
-    # If JSON is malformed, retry with a safer temperature.
-    for attempt in range(2):
-
-        current_temperature = (
-            temperature
-            if attempt == 0
-            else 0.2
+    if not GEMINI_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="GEMINI_API_KEY is not configured.",
         )
 
-        result = ollama_request(
-            "/api/chat",
-            {
-                "model": LLM_MODEL,
-
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    }
-                ],
-
-                "stream": False,
-
-                # Force structured JSON output.
-                "format": output_schema,
-
-                "options": {
-                    "temperature": current_temperature,
-
-                    # Give the model enough space
-                    # to finish the JSON response.
-                    "num_predict": num_predict,
-                },
+    try:
+        response = gemini_client.models.generate_content(
+            model=LLM_MODEL,
+            contents=prompt,
+            config={
+                "temperature": temperature,
+                "max_output_tokens": num_predict,
+                "response_mime_type": "application/json",
+                "response_schema": output_schema,
             },
         )
 
-        message = result.get(
-            "message",
-            {},
-        )
-
-        content = message.get(
-            "content",
-            "",
-        )
+        content = response.text
 
         if not content:
-
-            last_error = (
-                "The local LLM returned an empty response."
+            raise HTTPException(
+                status_code=502,
+                detail="Gemini returned an empty response.",
             )
 
-            continue
+        return json.loads(content)
 
-        try:
+    except HTTPException:
+        raise
 
-            return json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gemini returned invalid JSON: {exc}",
+        ) from exc
 
-        except json.JSONDecodeError as exc:
-
-            last_error = (
-                f"The local LLM returned invalid JSON: {exc}"
-            )
-
-    raise HTTPException(
-        status_code=502,
-        detail=(
-            last_error
-            or "The local LLM returned invalid JSON."
-        ),
-    )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Gemini request failed: {exc}",
+        ) from exc
 
 
 # =========================================================
@@ -276,29 +206,32 @@ EVALUATION_SCHEMA = {
 @app.get("/health")
 def health() -> dict[str, Any]:
 
-    result = ollama_request(
-        "/api/generate",
-        {
-            "model": LLM_MODEL,
+    if not GEMINI_API_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="GEMINI_API_KEY is not configured.",
+        )
 
-            "prompt": "Reply with exactly: OK",
-
-            "stream": False,
-
-            "options": {
-                "num_predict": 5,
+    try:
+        response = gemini_client.models.generate_content(
+            model=LLM_MODEL,
+            contents="Reply with exactly: OK",
+            config={
+                "max_output_tokens": 5,
             },
-        },
-    )
+        )
 
-    return {
-        "ok": True,
-        "model": LLM_MODEL,
-        "ollama": result.get(
-            "response",
-            "",
-        ),
-    }
+        return {
+            "ok": True,
+            "model": LLM_MODEL,
+            "gemini": response.text.strip(),
+        }
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Gemini health check failed: {exc}",
+        ) from exc
 
 
 # =========================================================
@@ -390,7 +323,7 @@ Return ONLY JSON.
         raise HTTPException(
             status_code=502,
             detail=(
-                "The local LLM did not generate "
+                "The AI service did not generate "
                 "a question."
             ),
         )
@@ -589,7 +522,7 @@ Return ONLY JSON.
         if str(item).strip()
     ]
 
-    # Fallback if Gemma returns an empty list.
+    # Fallback if Gemini returns an empty list.
 
     if not strengths:
 
@@ -620,7 +553,7 @@ Return ONLY JSON.
         if str(item).strip()
     ]
 
-    # Fallback if Gemma returns an empty list.
+    # Fallback if Gemini returns an empty list.
 
     if not weaknesses:
 
@@ -661,7 +594,7 @@ Return ONLY JSON.
     ).strip()
 
     # -----------------------------------------------------
-    # Detect if Gemma accidentally put JSON inside
+    # Detect if Gemini accidentally put JSON inside
     # ideal_answer.
     # -----------------------------------------------------
 
@@ -710,7 +643,7 @@ Return ONLY JSON.
         )
 
     # -----------------------------------------------------
-    # Final fallback if Gemma returns nothing.
+    # Final fallback if Gemini returns nothing.
     # -----------------------------------------------------
 
     if not ideal_answer:
@@ -759,30 +692,38 @@ def embed(
     request: EmbedRequest,
 ) -> dict[str, Any]:
 
-    result = ollama_request(
-        "/api/embed",
-        {
-            "model": EMBED_MODEL,
-
-            "input": request.text,
-        },
-    )
-
-    embeddings = result.get(
-        "embeddings",
-        [],
-    )
-
-    if not embeddings:
-
+    if not GEMINI_API_KEY:
         raise HTTPException(
-            status_code=502,
-            detail=(
-                "Embedding model returned "
-                "no vector."
+            status_code=500,
+            detail="GEMINI_API_KEY is not configured.",
+        )
+
+    try:
+        response = gemini_client.models.embed_content(
+            model=EMBED_MODEL,
+            contents=request.text,
+            config=types.EmbedContentConfig(
+                output_dimensionality=768,
             ),
         )
 
-    return {
-        "embedding": embeddings[0],
-    }
+        embeddings = response.embeddings
+
+        if not embeddings or not embeddings[0].values:
+            raise HTTPException(
+                status_code=502,
+                detail="Gemini embedding model returned no vector.",
+            )
+
+        return {
+            "embedding": embeddings[0].values,
+        }
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Gemini embedding request failed: {exc}",
+        ) from exc
