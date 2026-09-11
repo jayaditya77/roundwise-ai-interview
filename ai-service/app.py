@@ -1,32 +1,27 @@
 import json
-import os
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
-
-from google import genai
-from google.genai import types
 
 
 # =========================================================
 # Configuration
 # =========================================================
 
+import os
+
+from google import genai
+from google.genai import types
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
 if GEMINI_API_KEY:
     gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-else:
-    gemini_client = None
 
 LLM_MODEL = "gemini-3.1-flash-lite"
 EMBED_MODEL = "gemini-embedding-001"
 
-
-# =========================================================
-# FastAPI Application
-# =========================================================
 
 app = FastAPI(
     title="Roundwise GenAI Service",
@@ -56,67 +51,17 @@ class EmbedRequest(BaseModel):
 
 
 # =========================================================
-# JSON Helper
-# =========================================================
-
-def parse_json_response(content: str) -> dict[str, Any]:
-    """
-    Parse Gemini's JSON response safely.
-
-    Gemini should return JSON because response_mime_type
-    is set to application/json. This helper also handles
-    accidental markdown code fences.
-    """
-
-    if not content:
-        raise HTTPException(
-            status_code=502,
-            detail="Gemini returned an empty response.",
-        )
-
-    content = content.strip()
-
-    # Remove accidental markdown code fences.
-    if content.startswith("```json"):
-        content = content[7:]
-
-    elif content.startswith("```"):
-        content = content[3:]
-
-    if content.endswith("```"):
-        content = content[:-3]
-
-    content = content.strip()
-
-    try:
-        result = json.loads(content)
-
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Gemini returned invalid JSON: {exc}",
-        ) from exc
-
-    if not isinstance(result, dict):
-        raise HTTPException(
-            status_code=502,
-            detail="Gemini returned JSON, but it was not an object.",
-        )
-
-    return result
-
-
-# =========================================================
 # LLM Chat
 # =========================================================
 
 def chat(
     prompt: str,
+    output_schema: dict[str, Any],
     temperature: float = 0.1,
     num_predict: int = 300,
 ) -> dict[str, Any]:
 
-    if not GEMINI_API_KEY or gemini_client is None:
+    if not GEMINI_API_KEY:
         raise HTTPException(
             status_code=500,
             detail="GEMINI_API_KEY is not configured.",
@@ -130,13 +75,28 @@ def chat(
                 "temperature": temperature,
                 "max_output_tokens": num_predict,
                 "response_mime_type": "application/json",
+                "response_json_schema": output_schema,
             },
         )
 
-        return parse_json_response(response.text)
+        content = response.text
+
+        if not content:
+            raise HTTPException(
+                status_code=502,
+                detail="Gemini returned an empty response.",
+            )
+
+        return json.loads(content)
 
     except HTTPException:
         raise
+
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gemini returned invalid JSON: {exc}",
+        ) from exc
 
     except Exception as exc:
         raise HTTPException(
@@ -146,13 +106,105 @@ def chat(
 
 
 # =========================================================
+# Question JSON Schema
+# =========================================================
+
+QUESTION_SCHEMA = {
+    "type": "object",
+
+    "properties": {
+
+        "question": {
+            "type": "string",
+        },
+
+        "type": {
+            "type": "string",
+        },
+
+        "expected_points": {
+            "type": "array",
+
+            "items": {
+                "type": "string",
+            },
+
+            "maxItems": 3,
+        },
+    },
+
+    "required": [
+        "question",
+        "type",
+        "expected_points",
+    ],
+
+}
+
+
+# =========================================================
+# Evaluation JSON Schema
+# =========================================================
+
+EVALUATION_SCHEMA = {
+    "type": "object",
+
+    "properties": {
+
+        "score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 10,
+        },
+
+        "strengths": {
+            "type": "array",
+
+            "items": {
+                "type": "string",
+            },
+
+            "maxItems": 2,
+        },
+
+        "weaknesses": {
+            "type": "array",
+
+            "items": {
+                "type": "string",
+            },
+
+            "maxItems": 2,
+        },
+
+        "feedback": {
+            "type": "string",
+        },
+
+        "ideal_answer": {
+            "type": "string",
+        },
+    },
+
+    "required": [
+        "score",
+        "strengths",
+        "weaknesses",
+        "feedback",
+        "ideal_answer",
+    ],
+
+}
+
+
+# =========================================================
 # Health Check
 # =========================================================
 
 @app.get("/health")
 def health() -> dict[str, Any]:
 
-    if not GEMINI_API_KEY or gemini_client is None:
+    if not GEMINI_API_KEY:
         raise HTTPException(
             status_code=500,
             detail="GEMINI_API_KEY is not configured.",
@@ -192,6 +244,7 @@ def generate_question(
     context_instruction = ""
 
     if request.context:
+
         context_instruction = f"""
 Retrieved study material:
 
@@ -242,21 +295,12 @@ that a strong candidate should cover.
 
 Keep the question concise.
 
-Return ONLY valid JSON in exactly this format:
-
-{{
-  "question": "The interview question",
-  "type": "technical",
-  "expected_points": [
-    "Important point 1",
-    "Important point 2",
-    "Important point 3"
-  ]
-}}
+Return ONLY JSON.
 """
 
     result = chat(
         prompt,
+        QUESTION_SCHEMA,
         temperature=0.8,
         num_predict=350,
     )
@@ -273,6 +317,7 @@ Return ONLY valid JSON in exactly this format:
     ).strip()
 
     if not question:
+
         raise HTTPException(
             status_code=502,
             detail=(
@@ -293,6 +338,7 @@ Return ONLY valid JSON in exactly this format:
     ).strip()
 
     if not question_type:
+
         question_type = "technical"
 
     # =====================================================
@@ -308,6 +354,7 @@ Return ONLY valid JSON in exactly this format:
         expected_points,
         list,
     ):
+
         expected_points = []
 
     expected_points = [
@@ -316,19 +363,11 @@ Return ONLY valid JSON in exactly this format:
         if str(point).strip()
     ]
 
-    # If Gemini returned fewer than 3 points, create
-    # a safe fallback rather than breaking the frontend.
-
-    if not expected_points:
-        expected_points = [
-            "Explain the core concept correctly.",
-            "Explain the reasoning behind the approach.",
-            "Discuss relevant complexity or trade-offs.",
-        ]
-
     return {
         "question": question,
+
         "type": question_type,
+
         "expected_points": expected_points,
     }
 
@@ -378,42 +417,55 @@ Scoring:
 8-9 = strong answer
 10 = excellent and complete answer
 
-Return ONLY valid JSON in exactly this format:
+Return:
 
-{{
-  "score": 7,
-  "strengths": [
-    "Strength 1",
-    "Strength 2"
-  ],
-  "weaknesses": [
-    "Weakness 1",
-    "Weakness 2"
-  ],
-  "feedback": "One short paragraph explaining the evaluation.",
-  "ideal_answer": "A concise, technically correct answer to the actual interview question."
-}}
+score:
+An integer from 0 to 10.
+
+strengths:
+Exactly 2 short points about what the candidate did well.
+
+weaknesses:
+Exactly 2 short points about what the candidate should improve.
+
+feedback:
+One short paragraph explaining the evaluation.
+
+ideal_answer:
+A concise, technically correct answer to the actual
+interview question.
 
 IMPORTANT RULES:
 
-- score must be an integer from 0 to 10.
-- strengths must contain exactly 2 short points.
-- weaknesses must contain exactly 2 short points.
-- feedback must be concise.
-- ideal_answer must contain ONLY the actual ideal answer.
-- Do NOT put JSON inside ideal_answer.
-- Do NOT put score inside ideal_answer.
-- Do NOT put strengths inside ideal_answer.
-- Do NOT put weaknesses inside ideal_answer.
-- Do NOT put feedback inside ideal_answer.
-- Do NOT write "the QUESTION".
-- Do NOT write "the question".
-- Answer the actual question directly.
-- Do not leave any field empty.
+The ideal_answer field must contain ONLY
+the actual ideal answer.
+
+Do NOT put JSON inside ideal_answer.
+
+Do NOT put score inside ideal_answer.
+
+Do NOT put strengths inside ideal_answer.
+
+Do NOT put weaknesses inside ideal_answer.
+
+Do NOT put feedback inside ideal_answer.
+
+Do NOT write "the QUESTION".
+
+Do NOT write "the question".
+
+Answer the actual question directly.
+
+Do not leave any field empty.
+
+Keep everything concise.
+
+Return ONLY JSON.
 """
 
     result = chat(
         prompt,
+        EVALUATION_SCHEMA,
         temperature=0.1,
         num_predict=300,
     )
@@ -459,6 +511,7 @@ IMPORTANT RULES:
         strengths,
         list,
     ):
+
         strengths = []
 
     strengths = [
@@ -467,7 +520,10 @@ IMPORTANT RULES:
         if str(item).strip()
     ]
 
+    # Fallback if Gemini returns an empty list.
+
     if not strengths:
+
         strengths = [
             "Shows understanding of the main concept.",
             "Provides a relevant technical explanation.",
@@ -486,6 +542,7 @@ IMPORTANT RULES:
         weaknesses,
         list,
     ):
+
         weaknesses = []
 
     weaknesses = [
@@ -494,7 +551,10 @@ IMPORTANT RULES:
         if str(item).strip()
     ]
 
+    # Fallback if Gemini returns an empty list.
+
     if not weaknesses:
+
         weaknesses = [
             "Could provide more specific technical details.",
             "Could explain the trade-offs more clearly.",
@@ -512,6 +572,7 @@ IMPORTANT RULES:
     ).strip()
 
     if not feedback:
+
         feedback = (
             "The answer demonstrates a reasonable "
             "understanding of the topic. Add more "
@@ -609,9 +670,13 @@ IMPORTANT RULES:
 
     return {
         "score": score,
+
         "strengths": strengths,
+
         "weaknesses": weaknesses,
+
         "feedback": feedback,
+
         "ideal_answer": ideal_answer,
     }
 
@@ -625,14 +690,13 @@ def embed(
     request: EmbedRequest,
 ) -> dict[str, Any]:
 
-    if not GEMINI_API_KEY or gemini_client is None:
+    if not GEMINI_API_KEY:
         raise HTTPException(
             status_code=500,
             detail="GEMINI_API_KEY is not configured.",
         )
 
     try:
-
         response = gemini_client.models.embed_content(
             model=EMBED_MODEL,
             contents=request.text,
@@ -644,7 +708,6 @@ def embed(
         embeddings = response.embeddings
 
         if not embeddings or not embeddings[0].values:
-
             raise HTTPException(
                 status_code=502,
                 detail="Gemini embedding model returned no vector.",
@@ -655,11 +718,9 @@ def embed(
         }
 
     except HTTPException:
-
         raise
 
     except Exception as exc:
-
         raise HTTPException(
             status_code=503,
             detail=f"Gemini embedding request failed: {exc}",
