@@ -11,4 +11,10 @@ export const pool = mysql.createPool({
   database: process.env.DB_NAME || 'roundwise',
   waitForConnections: true,
   connectionLimit: 10,
+  ssl: process.env.DB_SSL === 'true'
+    ? {
+        minVersion: 'TLSv1.2',
+        rejectUnauthorized: true,
+      }
+    : undefined,
 });
