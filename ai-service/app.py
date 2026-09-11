@@ -56,12 +56,62 @@ class EmbedRequest(BaseModel):
 
 
 # =========================================================
+# JSON Helper
+# =========================================================
+
+def parse_json_response(content: str) -> dict[str, Any]:
+    """
+    Parse Gemini's JSON response safely.
+
+    Gemini should return JSON because response_mime_type
+    is set to application/json. This helper also handles
+    accidental markdown code fences.
+    """
+
+    if not content:
+        raise HTTPException(
+            status_code=502,
+            detail="Gemini returned an empty response.",
+        )
+
+    content = content.strip()
+
+    # Remove accidental markdown code fences.
+    if content.startswith("```json"):
+        content = content[7:]
+
+    elif content.startswith("```"):
+        content = content[3:]
+
+    if content.endswith("```"):
+        content = content[:-3]
+
+    content = content.strip()
+
+    try:
+        result = json.loads(content)
+
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gemini returned invalid JSON: {exc}",
+        ) from exc
+
+    if not isinstance(result, dict):
+        raise HTTPException(
+            status_code=502,
+            detail="Gemini returned JSON, but it was not an object.",
+        )
+
+    return result
+
+
+# =========================================================
 # LLM Chat
 # =========================================================
 
 def chat(
     prompt: str,
-    output_schema: dict[str, Any],
     temperature: float = 0.1,
     num_predict: int = 300,
 ) -> dict[str, Any]:
@@ -80,109 +130,19 @@ def chat(
                 "temperature": temperature,
                 "max_output_tokens": num_predict,
                 "response_mime_type": "application/json",
-
-                # Use response_json_schema instead of response_schema.
-                # This avoids the additional_properties conversion issue.
-                "response_json_schema": output_schema,
             },
         )
 
-        content = response.text
-
-        if not content:
-            raise HTTPException(
-                status_code=502,
-                detail="Gemini returned an empty response.",
-            )
-
-        return json.loads(content)
+        return parse_json_response(response.text)
 
     except HTTPException:
         raise
-
-    except json.JSONDecodeError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Gemini returned invalid JSON: {exc}",
-        ) from exc
 
     except Exception as exc:
         raise HTTPException(
             status_code=503,
             detail=f"Gemini request failed: {exc}",
         ) from exc
-
-
-# =========================================================
-# Question JSON Schema
-# =========================================================
-
-QUESTION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "question": {
-            "type": "string",
-        },
-        "type": {
-            "type": "string",
-        },
-        "expected_points": {
-            "type": "array",
-            "items": {
-                "type": "string",
-            },
-            "maxItems": 3,
-        },
-    },
-    "required": [
-        "question",
-        "type",
-        "expected_points",
-    ],
-}
-
-
-# =========================================================
-# Evaluation JSON Schema
-# =========================================================
-
-EVALUATION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "score": {
-            "type": "integer",
-            "minimum": 0,
-            "maximum": 10,
-        },
-        "strengths": {
-            "type": "array",
-            "items": {
-                "type": "string",
-            },
-            "maxItems": 2,
-        },
-        "weaknesses": {
-            "type": "array",
-            "items": {
-                "type": "string",
-            },
-            "maxItems": 2,
-        },
-        "feedback": {
-            "type": "string",
-        },
-        "ideal_answer": {
-            "type": "string",
-        },
-    },
-    "required": [
-        "score",
-        "strengths",
-        "weaknesses",
-        "feedback",
-        "ideal_answer",
-    ],
-}
 
 
 # =========================================================
@@ -282,12 +242,21 @@ that a strong candidate should cover.
 
 Keep the question concise.
 
-Return ONLY JSON.
+Return ONLY valid JSON in exactly this format:
+
+{{
+  "question": "The interview question",
+  "type": "technical",
+  "expected_points": [
+    "Important point 1",
+    "Important point 2",
+    "Important point 3"
+  ]
+}}
 """
 
     result = chat(
         prompt,
-        QUESTION_SCHEMA,
         temperature=0.8,
         num_predict=350,
     )
@@ -347,6 +316,16 @@ Return ONLY JSON.
         if str(point).strip()
     ]
 
+    # If Gemini returned fewer than 3 points, create
+    # a safe fallback rather than breaking the frontend.
+
+    if not expected_points:
+        expected_points = [
+            "Explain the core concept correctly.",
+            "Explain the reasoning behind the approach.",
+            "Discuss relevant complexity or trade-offs.",
+        ]
+
     return {
         "question": question,
         "type": question_type,
@@ -362,6 +341,9 @@ Return ONLY JSON.
 def evaluate_answer(
     request: EvaluateAnswerRequest,
 ) -> dict[str, Any]:
+
+    # Keep only the most important expected points.
+    # This keeps the prompt small and improves speed.
 
     expected_points = "; ".join(
         request.expected_points[:3]
@@ -396,55 +378,42 @@ Scoring:
 8-9 = strong answer
 10 = excellent and complete answer
 
-Return:
+Return ONLY valid JSON in exactly this format:
 
-score:
-An integer from 0 to 10.
-
-strengths:
-Exactly 2 short points about what the candidate did well.
-
-weaknesses:
-Exactly 2 short points about what the candidate should improve.
-
-feedback:
-One short paragraph explaining the evaluation.
-
-ideal_answer:
-A concise, technically correct answer to the actual
-interview question.
+{{
+  "score": 7,
+  "strengths": [
+    "Strength 1",
+    "Strength 2"
+  ],
+  "weaknesses": [
+    "Weakness 1",
+    "Weakness 2"
+  ],
+  "feedback": "One short paragraph explaining the evaluation.",
+  "ideal_answer": "A concise, technically correct answer to the actual interview question."
+}}
 
 IMPORTANT RULES:
 
-The ideal_answer field must contain ONLY
-the actual ideal answer.
-
-Do NOT put JSON inside ideal_answer.
-
-Do NOT put score inside ideal_answer.
-
-Do NOT put strengths inside ideal_answer.
-
-Do NOT put weaknesses inside ideal_answer.
-
-Do NOT put feedback inside ideal_answer.
-
-Do NOT write "the QUESTION".
-
-Do NOT write "the question".
-
-Answer the actual question directly.
-
-Do not leave any field empty.
-
-Keep everything concise.
-
-Return ONLY JSON.
+- score must be an integer from 0 to 10.
+- strengths must contain exactly 2 short points.
+- weaknesses must contain exactly 2 short points.
+- feedback must be concise.
+- ideal_answer must contain ONLY the actual ideal answer.
+- Do NOT put JSON inside ideal_answer.
+- Do NOT put score inside ideal_answer.
+- Do NOT put strengths inside ideal_answer.
+- Do NOT put weaknesses inside ideal_answer.
+- Do NOT put feedback inside ideal_answer.
+- Do NOT write "the QUESTION".
+- Do NOT write "the question".
+- Answer the actual question directly.
+- Do not leave any field empty.
 """
 
     result = chat(
         prompt,
-        EVALUATION_SCHEMA,
         temperature=0.1,
         num_predict=300,
     )
@@ -454,6 +423,7 @@ Return ONLY JSON.
     # =====================================================
 
     try:
+
         score = int(
             result.get(
                 "score",
@@ -465,6 +435,7 @@ Return ONLY JSON.
         TypeError,
         ValueError,
     ):
+
         score = 0
 
     score = max(
@@ -559,9 +530,15 @@ Return ONLY JSON.
         )
     ).strip()
 
+    # -----------------------------------------------------
+    # Detect if Gemini accidentally put JSON inside
+    # ideal_answer.
+    # -----------------------------------------------------
+
     if ideal_answer.startswith("{"):
 
         try:
+
             nested = json.loads(
                 ideal_answer
             )
@@ -570,18 +547,25 @@ Return ONLY JSON.
                 nested,
                 dict,
             ):
+
                 nested_ideal = nested.get(
                     "ideal_answer",
                     "",
                 )
 
                 if nested_ideal:
+
                     ideal_answer = str(
                         nested_ideal
                     ).strip()
 
         except json.JSONDecodeError:
+
             pass
+
+    # -----------------------------------------------------
+    # Remove common accidental wording.
+    # -----------------------------------------------------
 
     if ideal_answer:
 
@@ -594,6 +578,10 @@ Return ONLY JSON.
             "the question",
             request.question,
         )
+
+    # -----------------------------------------------------
+    # Final fallback if Gemini returns nothing.
+    # -----------------------------------------------------
 
     if not ideal_answer:
 
@@ -644,6 +632,7 @@ def embed(
         )
 
     try:
+
         response = gemini_client.models.embed_content(
             model=EMBED_MODEL,
             contents=request.text,
@@ -655,6 +644,7 @@ def embed(
         embeddings = response.embeddings
 
         if not embeddings or not embeddings[0].values:
+
             raise HTTPException(
                 status_code=502,
                 detail="Gemini embedding model returned no vector.",
@@ -665,9 +655,11 @@ def embed(
         }
 
     except HTTPException:
+
         raise
 
     except Exception as exc:
+
         raise HTTPException(
             status_code=503,
             detail=f"Gemini embedding request failed: {exc}",
