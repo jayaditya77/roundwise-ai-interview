@@ -20,6 +20,15 @@ export const authApi = {
 };
 
 export const interviewApi = {
+  // Real Multi-turn Session APIs
+  createSession: (data) => api.post('/interviews/sessions', data),
+  getSession: (id) => api.get(`/interviews/sessions/${id}`),
+  submitAnswer: (sessionId, data) => api.post(`/interviews/sessions/${sessionId}/answer`, data),
+  nextQuestion: (sessionId, data) => api.post(`/interviews/sessions/${sessionId}/next-question`, data),
+  completeSession: (sessionId) => api.post(`/interviews/sessions/${sessionId}/complete`),
+  listSessions: () => api.get('/interviews/sessions'),
+
+  // Legacy Single-Question APIs
   create: (data) => api.post('/interviews', data),
   answer: (data) => api.post('/interviews/answer', data),
   history: () => api.get('/interviews/history'),

@@ -1,7 +1,7 @@
 import cors from 'cors';
 import dotenv from 'dotenv';
 import express from 'express';
-import { pool } from './config/db.js';
+import { pool, initDatabase } from './config/db.js';
 import authRoutes from './routes/auth.routes.js';
 import documentRoutes from './routes/document.routes.js';
 import interviewRoutes from './routes/interview.routes.js';
@@ -40,6 +40,7 @@ app.use((error, req, res, next) => {
   });
 });
 
-app.listen(port, '0.0.0.0', () => {
+app.listen(port, '0.0.0.0', async () => {
   console.log(`Roundwise backend running on port ${port}`);
+  await initDatabase();
 });

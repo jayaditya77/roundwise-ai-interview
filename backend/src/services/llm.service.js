@@ -16,16 +16,59 @@ async function aiRequest(path, body) {
   return data;
 }
 
-export async function generateQuestion({ role, topic, difficulty, context = '' }) {
-  const result = await aiRequest('/generate-question', { role, topic, difficulty, context });
+export async function generateQuestion({
+  role = 'Software Engineer',
+  topic = 'DSA',
+  difficulty = 'Medium',
+  interviewType = 'Technical',
+  questionNumber = 1,
+  totalQuestions = 5,
+  previousQuestions = [],
+  context = '',
+}) {
+  const result = await aiRequest('/generate-question', {
+    role,
+    topic,
+    difficulty,
+    interview_type: interviewType,
+    question_number: questionNumber,
+    total_questions: totalQuestions,
+    previous_questions: previousQuestions,
+    context,
+  });
   return parseJson(JSON.stringify(result));
 }
 
-export async function evaluateAnswer({ question, answer, expectedPoints = [] }) {
+export async function evaluateAnswer({
+  question,
+  answer,
+  expectedPoints = [],
+  interviewType = 'Technical',
+}) {
   const result = await aiRequest('/evaluate-answer', {
     question,
     answer,
     expected_points: expectedPoints,
+    interview_type: interviewType,
+  });
+  return parseJson(JSON.stringify(result));
+}
+
+export async function generateFinalReport({
+  role,
+  topic,
+  difficulty,
+  interviewType,
+  totalQuestions,
+  qaHistory = [],
+}) {
+  const result = await aiRequest('/generate-final-report', {
+    role,
+    topic,
+    difficulty,
+    interview_type: interviewType,
+    total_questions: totalQuestions,
+    qa_history: qaHistory,
   });
   return parseJson(JSON.stringify(result));
 }
