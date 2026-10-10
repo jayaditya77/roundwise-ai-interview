@@ -17,6 +17,12 @@ api.interceptors.request.use((config) => {
 export const authApi = {
   register: (data) => api.post('/auth/register', data),
   login: (data) => api.post('/auth/login', data),
+  verifyEmail: (token) => api.post('/auth/verify-email', { token }),
+  resendVerification: (email) => api.post('/auth/resend-verification', { email }),
+  forgotPassword: (email) => api.post('/auth/forgot-password', { email }),
+  resetPassword: (data) => api.post('/auth/reset-password', data),
+  getProfile: () => api.get('/auth/profile'),
+  updateProfile: (data) => api.patch('/auth/profile', data),
 };
 
 export const interviewApi = {
@@ -38,4 +44,9 @@ export const documentApi = {
   upload: (formData) => api.post('/documents/upload', formData),
   list: () => api.get('/documents'),
   search: (query) => api.post('/documents/search', { query }),
+};
+
+export const resumeApi = {
+  upload: (formData) => api.post('/resume/upload', formData),
+  get: () => api.get('/resume'),
 };

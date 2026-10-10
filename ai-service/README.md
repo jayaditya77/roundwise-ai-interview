@@ -1,11 +1,10 @@
-# Roundwise Python GenAI Service
+# Roundwise Python Service
 
-Python/FastAPI service for the GenAI layer of Roundwise.
+Python/FastAPI service for resume extraction, interview practice, and study-material processing. It uses Google's Gemini API and requires a Gemini API key.
 
-- Gemma 3 4B via Ollama: question generation and answer evaluation.
-- nomic-embed-text via Ollama: embeddings for RAG.
+Set `GEMINI_API_KEY` in `backend/.env` or `ai-service/.env` before starting the service. The backend's default service URL is `http://localhost:8000`.
 
-Run:
+Start from the `ai-service` directory:
 
 ```bash
 python3 -m venv .venv

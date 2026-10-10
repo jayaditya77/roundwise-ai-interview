@@ -40,6 +40,7 @@ export async function createSession(req, res) {
       durationMinutes = 15,
       totalQuestions: requestedTotal,
       useRag = true,
+      useResume = false,
     } = req.body;
 
     const dur = [15, 30, 45].includes(Number(durationMinutes))
@@ -73,6 +74,31 @@ export async function createSession(req, res) {
 
     const context = contextRows.map((item) => item.content).join('\n---\n');
 
+    // Fetch candidate profile if resume grounding is enabled
+    let candidateProfile = {};
+    if (useResume) {
+      try {
+        const [resumeRows] = await pool.query(
+          `SELECT name, skills, projects, experience, education, summary
+           FROM candidate_resumes WHERE user_id = ? LIMIT 1`,
+          [req.user.id],
+        );
+        if (resumeRows.length) {
+          const r = resumeRows[0];
+          candidateProfile = {
+            name: r.name,
+            skills: parseJsonField(r.skills),
+            projects: parseJsonField(r.projects),
+            experience: parseJsonField(r.experience),
+            education: parseJsonField(r.education),
+            summary: r.summary,
+          };
+        }
+      } catch {
+        // Resume fetch failure is non-critical
+      }
+    }
+
     // Generate Question 1
     const question = await generateQuestion({
       role,
@@ -83,6 +109,8 @@ export async function createSession(req, res) {
       totalQuestions,
       previousQuestions: [],
       context,
+      candidateProfile,
+      useResume: useResume && Object.keys(candidateProfile).length > 0,
     });
 
     // Create session record
@@ -476,6 +504,32 @@ export async function getNextQuestion(req, res) {
 
     const previousTexts = existingQuestions.map((q) => q.question_text);
 
+    // Fetch candidate profile for resume-grounded questions
+    const { useResume = false } = req.body || {};
+    let candidateProfile = {};
+    if (useResume) {
+      try {
+        const [resumeRows] = await pool.query(
+          `SELECT name, skills, projects, experience, education, summary
+           FROM candidate_resumes WHERE user_id = ? LIMIT 1`,
+          [req.user.id],
+        );
+        if (resumeRows.length) {
+          const r = resumeRows[0];
+          candidateProfile = {
+            name: r.name,
+            skills: parseJsonField(r.skills),
+            projects: parseJsonField(r.projects),
+            experience: parseJsonField(r.experience),
+            education: parseJsonField(r.education),
+            summary: r.summary,
+          };
+        }
+      } catch {
+        // Non-critical
+      }
+    }
+
     // Generate next question
     const question = await generateQuestion({
       role: session.role,
@@ -486,7 +540,10 @@ export async function getNextQuestion(req, res) {
       totalQuestions: session.total_questions,
       previousQuestions: previousTexts,
       context,
+      candidateProfile,
+      useResume: useResume && Object.keys(candidateProfile).length > 0,
     });
+
 
     // Insert question into database
     const [questionRow] = await pool.query(

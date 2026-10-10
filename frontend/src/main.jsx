@@ -1,10 +1,10 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, useNavigate } from 'react-router-dom';
+import '@fontsource-variable/ibm-plex-sans';
 import {
   Code2,
   Users,
-  Sparkles,
   Clock,
   CheckCircle2,
   AlertTriangle,
@@ -21,8 +21,11 @@ import {
   FileCheck,
   TrendingUp,
   XCircle,
+  FileText,
+  User,
+  Upload,
 } from 'lucide-react';
-import { authApi, documentApi, interviewApi } from './services/api';
+import { authApi, documentApi, interviewApi, resumeApi } from './services/api';
 import './styles.css';
 
 // =========================================================
@@ -33,26 +36,108 @@ function Auth({ onLogin }) {
   const [mode, setMode] = useState('login');
   const [form, setForm] = useState({ name: '', email: '', password: '' });
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const [loading, setLoading] = useState(false);
+  const [resetToken, setResetToken] = useState('');
   const navigate = useNavigate();
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const verificationToken = params.get('verify');
+    const passwordResetToken = params.get('reset');
+    if (passwordResetToken) {
+      setResetToken(passwordResetToken);
+      setMode('reset');
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+      return;
+    }
+    if (!verificationToken) return;
+
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+    setMode('verifying');
+    setLoading(true);
+    authApi.verifyEmail(verificationToken)
+      .then((response) => {
+        localStorage.setItem('roundwise_token', response.data.token);
+        localStorage.setItem('roundwise_user', JSON.stringify(response.data.user));
+        onLogin(response.data.user);
+        navigate('/');
+      })
+      .catch((requestError) => {
+        setError(requestError.response?.data?.message || 'Verification link is invalid or expired.');
+        setMode('verifyPending');
+      })
+      .finally(() => setLoading(false));
+  }, []);
 
   async function submit(event) {
     event.preventDefault();
     setError('');
+    setNotice('');
     setLoading(true);
 
     try {
-      const response =
-        mode === 'login'
-          ? await authApi.login(form)
-          : await authApi.register(form);
+      if (mode === 'forgot') {
+        const response = await authApi.forgotPassword(form.email);
+        setNotice(response.data.message);
+        setMode('forgotSent');
+        return;
+      }
+
+      if (mode === 'reset') {
+        if (form.password.length < 8) {
+          setError('Use at least 8 characters for your new password.');
+          return;
+        }
+        if (form.password !== form.confirmPassword) {
+          setError('The passwords do not match.');
+          return;
+        }
+        const response = await authApi.resetPassword({ token: resetToken, password: form.password });
+        setNotice(response.data.message);
+        setForm({ name: '', email: form.email, password: '' });
+        setResetToken('');
+        setMode('login');
+        return;
+      }
+
+      if (mode === 'register') {
+        const response = await authApi.register(form);
+        setNotice(response.data.message);
+        setMode('verifyPending');
+        return;
+      }
+
+      const response = await authApi.login(form);
 
       localStorage.setItem('roundwise_token', response.data.token);
       localStorage.setItem('roundwise_user', JSON.stringify(response.data.user));
       onLogin(response.data.user);
       navigate('/');
     } catch (requestError) {
-      setError(requestError.response?.data?.message || 'Authentication request failed');
+      if (requestError.response?.data?.code === 'EMAIL_NOT_VERIFIED') {
+        setMode('verifyPending');
+        setNotice('Verify your email before signing in. You can request a fresh link below.');
+      } else if (requestError.response?.status === 503 && mode === 'register') {
+        setMode('verifyPending');
+        setError(requestError.response.data.message);
+      } else {
+        setError(requestError.response?.data?.message || 'Authentication request failed');
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function resendVerification() {
+    setError('');
+    setNotice('');
+    setLoading(true);
+    try {
+      const response = await authApi.resendVerification(form.email);
+      setNotice(response.data.message);
+    } catch (requestError) {
+      setError(requestError.response?.data?.message || 'Could not resend the verification email.');
     } finally {
       setLoading(false);
     }
@@ -63,58 +148,157 @@ function Auth({ onLogin }) {
   }
 
   const isLogin = mode === 'login';
+  const isRegister = mode === 'register';
+  const isForgot = mode === 'forgot';
+  const isReset = mode === 'reset';
+  const title = {
+    login: 'Welcome back',
+    register: 'Create your account',
+    verifyPending: 'Verify your email',
+    verifying: 'Verifying your email',
+    forgot: 'Reset your password',
+    forgotSent: 'Check your inbox',
+    reset: 'Choose a new password',
+  }[mode];
 
   return (
     <div className="auth">
       <div className="auth-card">
         <div className="brand">
-          <Sparkles size={22} />
+          <Layers size={20} />
           Round<span>wise</span>
         </div>
 
-        <h1>{isLogin ? 'Welcome back' : 'Create your account'}</h1>
-        <p className="muted">Next-generation AI mock interview platform.</p>
+        <h1>{title}</h1>
+        {['login', 'register'].includes(mode) && (
+          <p className="muted">Structured interview practice, with feedback you can use.</p>
+        )}
 
-        <form onSubmit={submit}>
-          {!isLogin && (
+        {['login', 'register', 'forgot', 'reset'].includes(mode) && (
+          <form onSubmit={submit}>
+            {isRegister && (
+              <input
+                autoComplete="name"
+                placeholder="Full name"
+                value={form.name}
+                onChange={(event) => updateField('name', event.target.value)}
+                required
+              />
+            )}
+
+            {!isReset && (
+              <input
+                type="email"
+                autoComplete="email"
+                placeholder="Email address"
+                value={form.email}
+                onChange={(event) => updateField('email', event.target.value)}
+                required
+              />
+            )}
+
+            {!isForgot && !isReset && (
+              <input
+                type="password"
+                autoComplete={isLogin ? 'current-password' : 'new-password'}
+                placeholder="Password (at least 8 characters)"
+                value={form.password}
+                onChange={(event) => updateField('password', event.target.value)}
+                minLength={8}
+                required
+              />
+            )}
+
+            {isReset && (
+              <>
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="New password (at least 8 characters)"
+                  value={form.password}
+                  onChange={(event) => updateField('password', event.target.value)}
+                  minLength={8}
+                  required
+                />
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  placeholder="Confirm new password"
+                  value={form.confirmPassword || ''}
+                  onChange={(event) => updateField('confirmPassword', event.target.value)}
+                  minLength={8}
+                  required
+                />
+              </>
+            )}
+
+            {isLogin && (
+              <button className="auth-inline-link" type="button" onClick={() => setMode('forgot')}>
+                Forgot password?
+              </button>
+            )}
+
+            {notice && <div className="auth-notice" role="status">{notice}</div>}
+            {error && <div className="error" role="alert">{error}</div>}
+
+            <button className="primary" type="submit" disabled={loading}>
+              {loading
+                ? 'Please wait...'
+                : isLogin
+                ? 'Sign in'
+                : isRegister
+                ? 'Create account'
+                : isForgot
+                ? 'Send reset link'
+                : 'Update password'}
+            </button>
+          </form>
+        )}
+
+        {mode === 'verifyPending' && (
+          <div className="auth-message-view">
+            <p className="muted">We’ll send a sign-in link to the address below. Open it to verify your account.</p>
             <input
-              placeholder="Full name"
-              value={form.name}
-              onChange={(event) => updateField('name', event.target.value)}
+              type="email"
+              autoComplete="email"
+              placeholder="Email address"
+              value={form.email}
+              onChange={(event) => updateField('email', event.target.value)}
               required
             />
-          )}
+            {notice && <div className="auth-notice" role="status">{notice}</div>}
+            {error && <div className="error" role="alert">{error}</div>}
+            <button className="primary" onClick={resendVerification} disabled={loading || !form.email} type="button">
+              {loading ? 'Sending...' : 'Resend verification email'}
+            </button>
+          </div>
+        )}
 
-          <input
-            type="email"
-            placeholder="Email address"
-            value={form.email}
-            onChange={(event) => updateField('email', event.target.value)}
-            required
-          />
+        {mode === 'forgotSent' && (
+          <div className="auth-message-view">
+            <p className="muted">{notice}</p>
+          </div>
+        )}
 
-          <input
-            type="password"
-            placeholder="Password"
-            value={form.password}
-            onChange={(event) => updateField('password', event.target.value)}
-            required
-          />
+        {mode === 'verifying' && (
+          <div className="auth-message-view">
+            <p className="muted">{loading ? 'Please wait while we confirm your address.' : notice}</p>
+          </div>
+        )}
 
-          {error && <div className="error">{error}</div>}
-
-          <button className="primary" type="submit" disabled={loading}>
-            {loading ? 'Please wait...' : isLogin ? 'Login' : 'Create Account'}
+        {['login', 'register', 'forgot', 'reset', 'verifyPending', 'forgotSent'].includes(mode) && (
+          <button
+            className="link"
+            type="button"
+            onClick={() => {
+              setError('');
+              setNotice('');
+              setMode(isLogin ? 'register' : 'login');
+            }}
+          >
+            {isLogin ? "Don't have an account? Register" : 'Back to sign in'}
           </button>
-        </form>
-
-        <button
-          className="link"
-          type="button"
-          onClick={() => setMode(isLogin ? 'register' : 'login')}
-        >
-          {isLogin ? "Don't have an account? Register" : 'Already have an account? Login'}
-        </button>
+        )}
       </div>
     </div>
   );
@@ -124,7 +308,31 @@ function Auth({ onLogin }) {
 // Main App Component
 // =========================================================
 
-function App({ user, onLogout }) {
+function getTopicPerformance(sessions) {
+  const scoresByTopic = new Map();
+
+  sessions.forEach((session) => {
+    if (session.status !== 'completed' || session.overallScore === null || session.overallScore === undefined) {
+      return;
+    }
+
+    const topic = session.topic?.trim();
+    const score = Number(session.overallScore);
+    if (!topic || !Number.isFinite(score)) return;
+
+    const scores = scoresByTopic.get(topic) || [];
+    scores.push(score);
+    scoresByTopic.set(topic, scores);
+  });
+
+  return Array.from(scoresByTopic, ([topic, scores]) => ({
+    topic,
+    sessions: scores.length,
+    average: scores.reduce((total, score) => total + score, 0) / scores.length,
+  })).sort((first, second) => first.average - second.average || second.sessions - first.sessions);
+}
+
+function App({ user, onLogout, onUserUpdate }) {
   const [tab, setTab] = useState('practice');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -137,6 +345,7 @@ function App({ user, onLogout }) {
   const [durationMinutes, setDurationMinutes] = useState(30);
   const [totalQuestions, setTotalQuestions] = useState(5);
   const [rag, setRag] = useState(true);
+  const [useResume, setUseResume] = useState(false);
 
   // Active Session State
   const [activeSession, setActiveSession] = useState(null);
@@ -154,20 +363,69 @@ function App({ user, onLogout }) {
   const [sessionsHistory, setSessionsHistory] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [file, setFile] = useState(null);
+  const [resumeProfile, setResumeProfile] = useState(null);
+  const [resumeFile, setResumeFile] = useState(null);
+  const [resumeUploading, setResumeUploading] = useState(false);
+  const [profile, setProfile] = useState({ name: user.name, email: user.email });
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileSaving, setProfileSaving] = useState(false);
 
   // Accordion state for review
   const [expandedQuestions, setExpandedQuestions] = useState({});
 
   async function loadData() {
     try {
-      const [historyResponse, documentsResponse] = await Promise.all([
+      const [historyResponse, documentsResponse, resumeResponse] = await Promise.all([
         interviewApi.listSessions(),
         documentApi.list(),
+        resumeApi.get(),
       ]);
       setSessionsHistory(historyResponse.data || []);
       setDocuments(documentsResponse.data || []);
+      setResumeProfile(resumeResponse.data || null);
     } catch {
       // Backend may be starting or idle
+    }
+  }
+
+  async function loadProfile() {
+    setProfileLoading(true);
+    try {
+      const response = await authApi.getProfile();
+      setProfile({
+        ...response.data,
+        graduationYear: response.data.graduationYear || '',
+      });
+    } catch (requestError) {
+      setMessage(requestError.response?.data?.message || 'Could not load your profile.');
+    } finally {
+      setProfileLoading(false);
+    }
+  }
+
+  async function saveProfile(event) {
+    event.preventDefault();
+    setProfileSaving(true);
+    setMessage('');
+    try {
+      const response = await authApi.updateProfile({
+        name: profile.name,
+        college: profile.college || '',
+        degree: profile.degree || '',
+        graduationYear: profile.graduationYear || '',
+        targetRole: profile.targetRole || '',
+        experienceLevel: profile.experienceLevel || '',
+        location: profile.location || '',
+      });
+      setProfile({ ...response.data, graduationYear: response.data.graduationYear || '' });
+      const updatedUser = { ...user, name: response.data.name, email: response.data.email };
+      localStorage.setItem('roundwise_user', JSON.stringify(updatedUser));
+      onUserUpdate(updatedUser);
+      setMessage('Profile saved.');
+    } catch (requestError) {
+      setMessage(requestError.response?.data?.message || 'Could not save your profile.');
+    } finally {
+      setProfileSaving(false);
     }
   }
 
@@ -223,6 +481,7 @@ function App({ user, onLogout }) {
         durationMinutes,
         totalQuestions,
         useRag: rag,
+        useResume: useResume && !!resumeProfile,
       });
 
       setActiveSession(response.data.session);
@@ -275,6 +534,7 @@ function App({ user, onLogout }) {
     try {
       const response = await interviewApi.nextQuestion(activeSession.id, {
         useRag: rag,
+        useResume: useResume && !!resumeProfile,
       });
 
       setCurrentQuestion(response.data);
@@ -340,13 +600,35 @@ function App({ user, onLogout }) {
       formData.append('file', file);
 
       const response = await documentApi.upload(formData);
-      setMessage(`Uploaded ${response.data.filename} (${response.data.chunks} chunks embedded)`);
+      setMessage(`Uploaded ${response.data.filename}`);
       setFile(null);
       await loadData();
     } catch (requestError) {
       setMessage(requestError.response?.data?.message || 'Upload failed');
     } finally {
       setLoading(false);
+    }
+  }
+
+  // Upload resume
+  async function uploadResumeFile() {
+    if (!resumeFile) return;
+    setResumeUploading(true);
+    setMessage('');
+
+    try {
+      const formData = new FormData();
+      formData.append('file', resumeFile);
+
+      const response = await resumeApi.upload(formData);
+      setResumeProfile(response.data);
+      setResumeFile(null);
+      setUseResume(true);
+      setMessage(`✅ Resume parsed successfully for ${response.data.name}! ${response.data.skills?.length || 0} skills and ${response.data.projects?.length || 0} projects extracted.`);
+    } catch (requestError) {
+      setMessage(requestError.response?.data?.message || 'Resume upload failed');
+    } finally {
+      setResumeUploading(false);
     }
   }
 
@@ -383,11 +665,14 @@ function App({ user, onLogout }) {
     return 'rec-needs-improvement';
   };
 
+  const topicPerformance = getTopicPerformance(sessionsHistory);
+  const recommendedTopic = topicPerformance[0];
+
   return (
     <div className="shell">
       <aside>
         <div className="brand">
-          <Sparkles size={20} />
+          <Layers size={19} />
           Round<span>wise</span>
         </div>
 
@@ -412,6 +697,17 @@ function App({ user, onLogout }) {
           >
             <History size={17} />
             Session History
+          </button>
+          <button
+            className={tab === 'profile' ? 'active' : ''}
+            onClick={() => {
+              setTab('profile');
+              loadProfile();
+            }}
+            type="button"
+          >
+            <User size={17} />
+            Profile
           </button>
           <button
             className={tab === 'knowledge' ? 'active' : ''}
@@ -446,6 +742,134 @@ function App({ user, onLogout }) {
           >
             {message}
           </button>
+        )}
+
+        {tab === 'profile' && (
+          <section className="profile-page">
+            <header>
+              <h1>Your Profile</h1>
+              <p className="muted">Manage the details you use for interview preparation.</p>
+            </header>
+
+            <form className="card profile-form" onSubmit={saveProfile}>
+              {profileLoading ? (
+                <p className="muted">Loading profile...</p>
+              ) : (
+                <>
+                  <section className="profile-form-section">
+                    <div className="profile-form-heading">
+                      <h2>Account details</h2>
+                      <p>Your email is used to sign in and is verified.</p>
+                    </div>
+                    <div className="profile-grid">
+                      <label>
+                        Full name
+                        <input
+                          autoComplete="name"
+                          maxLength={100}
+                          value={profile.name || ''}
+                          onChange={(event) => setProfile((current) => ({ ...current, name: event.target.value }))}
+                          required
+                        />
+                      </label>
+                      <label>
+                        Email address
+                        <input type="email" value={profile.email || ''} readOnly aria-readonly="true" />
+                      </label>
+                    </div>
+                  </section>
+
+                  <section className="profile-form-section">
+                    <div className="profile-form-heading">
+                      <h2>Education</h2>
+                      <p>Optional details for your academic background.</p>
+                    </div>
+                    <div className="profile-grid">
+                      <label>
+                        College or university
+                        <input
+                          autoComplete="organization"
+                          maxLength={180}
+                          placeholder="e.g. State University"
+                          value={profile.college || ''}
+                          onChange={(event) => setProfile((current) => ({ ...current, college: event.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        Degree or program
+                        <input
+                          maxLength={140}
+                          placeholder="e.g. B.S. Computer Science"
+                          value={profile.degree || ''}
+                          onChange={(event) => setProfile((current) => ({ ...current, degree: event.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        Graduation year
+                        <input
+                          type="number"
+                          min={1950}
+                          max={2150}
+                          placeholder="e.g. 2027"
+                          value={profile.graduationYear || ''}
+                          onChange={(event) => setProfile((current) => ({ ...current, graduationYear: event.target.value }))}
+                        />
+                      </label>
+                    </div>
+                  </section>
+
+                  <section className="profile-form-section">
+                    <div className="profile-form-heading">
+                      <h2>Career focus</h2>
+                      <p>Help keep your practice goals organized.</p>
+                    </div>
+                    <div className="profile-grid">
+                      <label>
+                        Target role
+                        <input
+                          maxLength={120}
+                          placeholder="e.g. Backend Engineer"
+                          value={profile.targetRole || ''}
+                          onChange={(event) => setProfile((current) => ({ ...current, targetRole: event.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        Experience level
+                        <select
+                          value={profile.experienceLevel || ''}
+                          onChange={(event) => setProfile((current) => ({ ...current, experienceLevel: event.target.value }))}
+                        >
+                          <option value="">Select level</option>
+                          <option>Student</option>
+                          <option>Entry-level</option>
+                          <option>Early career</option>
+                          <option>Mid-career</option>
+                          <option>Senior</option>
+                        </select>
+                      </label>
+                      <label>
+                        Location
+                        <input
+                          autoComplete="address-level2"
+                          maxLength={120}
+                          placeholder="City or region"
+                          value={profile.location || ''}
+                          onChange={(event) => setProfile((current) => ({ ...current, location: event.target.value }))}
+                        />
+                      </label>
+                    </div>
+                  </section>
+
+                  <div className="profile-form-actions">
+                    <span className="muted">Your profile is private to your account.</span>
+                    <button className="primary" type="submit" disabled={profileSaving}>
+                      {profileSaving ? 'Saving...' : 'Save profile'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </form>
+          </section>
         )}
 
         {/* =========================================================
@@ -514,7 +938,7 @@ function App({ user, onLogout }) {
                     </div>
 
                     <div className="report-section">
-                      <h3>Executive Performance Summary</h3>
+                      <h3>Performance Summary</h3>
                       <p>{viewingPastReport.evaluationResult.summary}</p>
                     </div>
 
@@ -582,7 +1006,7 @@ function App({ user, onLogout }) {
                             {q.answer.userAnswer}
                           </p>
                           <p>
-                            <b>AI Feedback:</b> {q.answer.feedback}
+                            <b>Feedback:</b> {q.answer.feedback}
                           </p>
                           {q.answer.idealAnswer && (
                             <p style={{ color: '#065f46' }}>
@@ -604,13 +1028,13 @@ function App({ user, onLogout }) {
             )}
 
             {/* VIEWING NEWLY GENERATED FINAL REPORT */}
-            {!viewingPastReport && finalReport && (
+            {!viewingPastReport && finalReport && !questionFeedback && (
               <div>
                 <div className="report-hero">
                   <span className="badge badge-rag">
                     <FileCheck size={13} /> Session Complete
                   </span>
-                  <h1>Interview Evaluation Report</h1>
+                  <h1>Session Summary</h1>
                   <p>
                     {activeSession.role} • {activeSession.interviewType} Round •{' '}
                     {activeSession.topic} • {activeSession.totalQuestions} Questions
@@ -697,7 +1121,7 @@ function App({ user, onLogout }) {
             )}
 
             {/* ACTIVE INTERVIEW IN PROGRESS */}
-            {!viewingPastReport && !finalReport && activeSession && currentQuestion && (
+            {!viewingPastReport && (!finalReport || questionFeedback) && activeSession && currentQuestion && (
               <div className="session-container">
                 <div className="session-header-bar">
                   <div className="session-info">
@@ -793,7 +1217,10 @@ function App({ user, onLogout }) {
                     </span>
                     <span className="badge">{activeSession.difficulty}</span>
                     {currentQuestion.usedRag && (
-                      <span className="badge badge-rag">RAG Grounded</span>
+                      <span className="badge badge-rag">Study Materials</span>
+                    )}
+                    {useResume && resumeProfile && (
+                      <span className="badge badge-resume"><User size={11} /> Resume Grounded</span>
                     )}
                   </div>
 
@@ -801,7 +1228,7 @@ function App({ user, onLogout }) {
 
                   {currentQuestion.expectedPoints?.length > 0 && (
                     <details className="expected-points-box">
-                      <summary>💡 View Key Evaluation Points</summary>
+                      <summary>View evaluation criteria</summary>
                       <ul>
                         {currentQuestion.expectedPoints.map((point, idx) => (
                           <li key={idx}>{point}</li>
@@ -886,7 +1313,7 @@ function App({ user, onLogout }) {
 
                       {questionFeedback.idealAnswer && (
                         <details className="ideal-answer-box">
-                          <summary>🔍 View Model Ideal Answer</summary>
+                          <summary>View sample answer</summary>
                           <p>{questionFeedback.idealAnswer}</p>
                         </details>
                       )}
@@ -911,16 +1338,10 @@ function App({ user, onLogout }) {
                         ) : (
                           <button
                             className="primary"
-                            onClick={() => {
-                              // If it was the last question, report was already generated
-                              // or can be triggered
-                              if (finalReport) {
-                                // Final report view handles it
-                              }
-                            }}
+                            onClick={() => setQuestionFeedback(null)}
                             type="button"
                           >
-                            <Award size={16} /> Interview Complete
+                            <Award size={16} /> View Final Report <ChevronRight size={16} />
                           </button>
                         )}
                       </div>
@@ -936,8 +1357,7 @@ function App({ user, onLogout }) {
                 <header>
                   <h1>Start an Interview Session</h1>
                   <p className="muted">
-                    Configure a complete multi-turn interview with real-time feedback and an
-                    executive final report.
+                    Set up a focused session with immediate feedback after every answer.
                   </p>
                 </header>
 
@@ -981,7 +1401,7 @@ function App({ user, onLogout }) {
                     >
                       <div className="select-card-header">
                         <b>Mixed Interview</b>
-                        <Sparkles size={18} color="#7e22ce" />
+                        <Layers size={18} />
                       </div>
                       <p>
                         Full-loop mock interview balancing technical depth and behavioral culture fit.
@@ -1074,7 +1494,7 @@ function App({ user, onLogout }) {
                     </label>
                   </div>
 
-                  <div style={{ marginTop: 18 }}>
+                  <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 10 }}>
                     <label className="toggle">
                       <input
                         type="checkbox"
@@ -1082,8 +1502,22 @@ function App({ user, onLogout }) {
                         onChange={(e) => setRag(e.target.checked)}
                       />
                       <span>
-                        Ground questions using my uploaded study materials (RAG)
+                        Use my uploaded study materials
                         {documents.length > 0 && ` • ${documents.length} documents ready`}
+                      </span>
+                    </label>
+                    <label className={`toggle ${!resumeProfile ? 'toggle-disabled' : ''}`}>
+                      <input
+                        type="checkbox"
+                        checked={useResume && !!resumeProfile}
+                        onChange={(e) => setUseResume(e.target.checked)}
+                        disabled={!resumeProfile}
+                      />
+                      <span>
+                        Ground questions using my resume (projects &amp; skills)
+                        {resumeProfile
+                          ? ` • ${resumeProfile.name} — ${resumeProfile.skills?.length || 0} skills, ${resumeProfile.projects?.length || 0} projects`
+                          : ' • Upload your resume in Knowledge Base first'}
                       </span>
                     </label>
                   </div>
@@ -1094,7 +1528,7 @@ function App({ user, onLogout }) {
                     disabled={loading}
                     type="button"
                   >
-                    <Sparkles size={17} />
+                    <Briefcase size={17} />
                     {loading ? 'Creating Interview Session...' : 'Start Interview Session'}
                   </button>
                 </div>
@@ -1111,9 +1545,71 @@ function App({ user, onLogout }) {
             <header>
               <h1>Interview Session History</h1>
               <p className="muted">
-                Review your completed sessions, scores, and hiring recommendations.
+                See your progress by topic and choose what to practice next.
               </p>
             </header>
+
+            <section className="practice-plan" aria-labelledby="practice-plan-title">
+              <div className="practice-plan-heading">
+                <div>
+                  <span className="practice-plan-eyebrow"><TrendingUp size={14} /> Progress overview</span>
+                  <h2 id="practice-plan-title">Your topic practice plan</h2>
+                </div>
+                <span className="practice-plan-count">
+                  {topicPerformance.length} {topicPerformance.length === 1 ? 'topic' : 'topics'} tracked
+                </span>
+              </div>
+
+              {topicPerformance.length ? (
+                <div className="practice-plan-content">
+                  <div className="practice-recommendation">
+                    <span className="recommendation-label">Recommended next</span>
+                    <h3>{recommendedTopic.topic}</h3>
+                    <p>
+                      Lowest average across {recommendedTopic.sessions}{' '}
+                      {recommendedTopic.sessions === 1 ? 'session' : 'sessions'}.
+                      {' '}Practice this topic to build consistency.
+                    </p>
+                    <button
+                      className="btn-secondary"
+                      onClick={() => {
+                        setTopic(recommendedTopic.topic);
+                        setTab('practice');
+                      }}
+                      type="button"
+                    >
+                      Set up practice <ChevronRight size={15} />
+                    </button>
+                  </div>
+
+                  <div className="topic-performance-list">
+                    {topicPerformance.map((item) => (
+                      <div className="topic-performance" key={item.topic}>
+                        <div className="topic-performance-meta">
+                          <b>{item.topic}</b>
+                          <span>{item.average.toFixed(1)}/10</span>
+                        </div>
+                        <div
+                          className="topic-score-track"
+                          role="img"
+                          aria-label={`${item.topic}: ${item.average.toFixed(1)} out of 10`}
+                        >
+                          <span
+                            className={item.average < 6 ? 'topic-score-fill needs-practice' : 'topic-score-fill'}
+                            style={{ width: `${Math.max(0, Math.min(100, item.average * 10))}%` }}
+                          />
+                        </div>
+                        <small>{item.sessions} completed {item.sessions === 1 ? 'session' : 'sessions'}</small>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <p className="practice-plan-empty">
+                  Complete an interview session to see topic scores and a personalized practice focus.
+                </p>
+              )}
+            </section>
 
             <div className="card">
               {sessionsHistory.length ? (
@@ -1205,54 +1701,199 @@ function App({ user, onLogout }) {
             KNOWLEDGE BASE TAB
             ========================================================= */}
         {tab === 'knowledge' && (
-          <section>
+          <section className="knowledge-page">
             <header>
-              <h1>Knowledge Base & Study Materials</h1>
+              <div className="knowledge-kicker"><BookOpen size={15} /> Your library</div>
+              <h1>Knowledge Base &amp; Study Materials</h1>
               <p className="muted">
-                Upload PDFs of technical topics, company question banks, or notes. Questions will
-                be grounded via vector embeddings and cosine similarity.
+                Keep your resume and study PDFs together in one place.
               </p>
             </header>
 
-            <div className="card upload">
-              <h2>Upload Study Material</h2>
-              <p className="muted">
-                PDFs are parsed into 1,200-character overlapping chunks and embedded with Gemini.
-              </p>
+            {/* ===== RESUME UPLOAD ===== */}
+            <div className="card resume-card">
+              <div className="resume-card-header">
+                <div>
+                  <h2><FileText size={18} /> Your Resume</h2>
+                  <p className="muted">
+                    Keep your experience and background on hand for interview practice.
+                  </p>
+                </div>
+                {resumeProfile && (
+                  <span className="badge badge-resume">
+                    Active
+                  </span>
+                )}
+              </div>
 
-              <input
-                type="file"
-                accept="application/pdf"
-                onChange={(event) => setFile(event.target.files?.[0] || null)}
-              />
+              {resumeProfile ? (
+                <div className="resume-profile">
+                  <div className="resume-profile-name">
+                    <User size={20} />
+                    <div>
+                      <b>{resumeProfile.name}</b>
+                      <p className="muted" style={{ margin: 0, fontSize: 12 }}>{resumeProfile.filename}</p>
+                    </div>
+                  </div>
 
-              <button
-                className="primary"
-                disabled={!file || loading}
-                onClick={uploadDocument}
-                type="button"
-              >
-                {loading ? 'Processing & Embedding...' : 'Upload PDF'}
-              </button>
+                  {resumeProfile.summary && (
+                    <p style={{ fontSize: 13, color: '#4b5563', margin: '12px 0 0', lineHeight: 1.6 }}>
+                      {resumeProfile.summary}
+                    </p>
+                  )}
+
+                  {resumeProfile.skills?.length > 0 && (
+                    <div className="resume-section">
+                      <b>Skills</b>
+                      <div className="skill-chips">
+                        {resumeProfile.skills.map((s, i) => (
+                          <span key={i} className="skill-chip">{s}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {resumeProfile.projects?.length > 0 && (
+                    <div className="resume-section">
+                      <b>Projects ({resumeProfile.projects.length})</b>
+                      <div className="project-list">
+                        {resumeProfile.projects.map((p, i) => (
+                          <div key={i} className="project-item">
+                            <div className="project-name">{p.name}</div>
+                            <p className="project-desc">{p.description}</p>
+                            {p.technologies?.length > 0 && (
+                              <div className="skill-chips" style={{ marginTop: 4 }}>
+                                {p.technologies.map((t, j) => (
+                                  <span key={j} className="skill-chip skill-chip-sm">{t}</span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {resumeProfile.experience?.length > 0 && (
+                    <div className="resume-section">
+                      <b>Experience</b>
+                      {resumeProfile.experience.map((e, i) => (
+                        <div key={i} style={{ marginTop: 8 }}>
+                          <b style={{ fontSize: 13 }}>{e.role}</b>
+                          {e.company && <span style={{ color: '#6b7280', fontSize: 12 }}> @ {e.company}</span>}
+                          {e.duration && <span style={{ color: '#9ca3af', fontSize: 11, marginLeft: 6 }}>({e.duration})</span>}
+                          {e.responsibilities && (
+                            <p style={{ fontSize: 12, color: '#4b5563', margin: '2px 0 0' }}>{e.responsibilities}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div style={{ marginTop: 16, paddingTop: 12, borderTop: '1px solid #e5e7eb' }}>
+                    <p style={{ fontSize: 12, color: '#6b7280', marginBottom: 6 }}>Replace resume:</p>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+                      <input
+                        type="file"
+                        accept="application/pdf"
+                        onChange={(e) => setResumeFile(e.target.files?.[0] || null)}
+                        style={{ flex: 1, fontSize: 12 }}
+                      />
+                      <button
+                        className="btn-secondary"
+                        disabled={!resumeFile || resumeUploading}
+                        onClick={uploadResumeFile}
+                        type="button"
+                        style={{ whiteSpace: 'nowrap' }}
+                      >
+                        {resumeUploading ? 'Parsing...' : 'Replace Resume'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="resume-upload-empty">
+                  <div className="resume-upload-icon"><FileText size={22} /></div>
+                  <p>No resume added yet. Choose a PDF to add it to your library.</p>
+                  <div className="resume-upload-controls">
+                    <input
+                      type="file"
+                      accept="application/pdf"
+                      onChange={(e) => setResumeFile(e.target.files?.[0] || null)}
+                    />
+                    <button
+                      className="primary"
+                      disabled={!resumeFile || resumeUploading}
+                      onClick={uploadResumeFile}
+                      type="button"
+                    >
+                      {resumeUploading ? 'Uploading...' : 'Upload Resume'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
-            <div className="card" style={{ marginTop: 24 }}>
-              <h2>Your Uploaded Documents ({documents.length})</h2>
+            {/* ===== STUDY MATERIALS ===== */}
+            <div className="knowledge-grid">
+              <div className="card knowledge-upload">
+                <div className="knowledge-card-title">
+                  <span className="knowledge-icon"><Upload size={18} /></span>
+                  <div>
+                    <h2>Add study materials</h2>
+                    <p className="muted">Choose a PDF to add to your library.</p>
+                  </div>
+                </div>
 
-              {documents.length ? (
-                <ul className="docs">
-                  {documents.map((document) => (
-                    <li key={document.id}>
-                      <span>
-                        <b>{document.filename}</b>
-                      </span>
-                      <small>{new Date(document.created_at).toLocaleString()}</small>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="muted">No study materials uploaded yet.</p>
-              )}
+                <label className="knowledge-file-picker" htmlFor="study-material-file">
+                  <FileText size={17} />
+                  <span>{file?.name || 'Choose a PDF file'}</span>
+                  <input
+                    id="study-material-file"
+                    type="file"
+                    accept="application/pdf"
+                    onChange={(event) => setFile(event.target.files?.[0] || null)}
+                  />
+                </label>
+
+                <button
+                  className="primary knowledge-upload-button"
+                  disabled={!file || loading}
+                  onClick={uploadDocument}
+                  type="button"
+                >
+                  {loading ? 'Uploading...' : 'Upload PDF'}
+                </button>
+              </div>
+
+              <div className="card knowledge-library">
+                <div className="knowledge-library-header">
+                  <div>
+                    <h2>Study materials</h2>
+                    <p className="muted">PDFs you have added to your library.</p>
+                  </div>
+                  <span className="knowledge-count">{documents.length}</span>
+                </div>
+
+                {documents.length ? (
+                  <ul className="docs">
+                    {documents.map((document) => (
+                      <li key={document.id}>
+                        <span className="knowledge-document-icon"><FileText size={17} /></span>
+                        <span className="knowledge-document-details">
+                          <b>{document.filename}</b>
+                          <small>Added {new Date(document.created_at).toLocaleString()}</small>
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="knowledge-empty">
+                    <BookOpen size={21} />
+                    <p>Your study PDFs will appear here.</p>
+                  </div>
+                )}
+              </div>
             </div>
           </section>
         )}
@@ -1278,7 +1919,13 @@ function Root() {
     return <Auth onLogin={setUser} />;
   }
 
-  return <App user={user} onLogout={() => setUser(null)} />;
+  return (
+    <App
+      user={user}
+      onLogout={() => setUser(null)}
+      onUserUpdate={setUser}
+    />
+  );
 }
 
 createRoot(document.getElementById('root')).render(

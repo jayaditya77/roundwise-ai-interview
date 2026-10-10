@@ -7,7 +7,58 @@ CREATE TABLE IF NOT EXISTS users (
   name VARCHAR(100) NOT NULL,
   email VARCHAR(150) NOT NULL UNIQUE,
   password_hash VARCHAR(255) NOT NULL,
+  email_verified BOOLEAN NOT NULL DEFAULT TRUE,
+  auth_version INT NOT NULL DEFAULT 0,
+  college VARCHAR(180) NULL,
+  degree VARCHAR(140) NULL,
+  graduation_year SMALLINT NULL,
+  target_role VARCHAR(120) NULL,
+  experience_level VARCHAR(40) NULL,
+  location VARCHAR(120) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+  token_hash CHAR(64) PRIMARY KEY,
+  user_id INT NOT NULL,
+  expires_at DATETIME NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX (user_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  token_hash CHAR(64) PRIMARY KEY,
+  user_id INT NOT NULL,
+  expires_at DATETIME NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX (user_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS candidate_resumes (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  user_id INT NOT NULL,
+  filename VARCHAR(255) NOT NULL,
+  raw_text MEDIUMTEXT NOT NULL,
+  profile JSON NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX (user_id)
+);
+
+CREATE TABLE IF NOT EXISTS resume_chunks (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  resume_id INT NOT NULL,
+  user_id INT NOT NULL,
+  chunk_index INT NOT NULL,
+  chunk_type VARCHAR(50) DEFAULT 'general',
+  content TEXT NOT NULL,
+  embedding JSON NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (resume_id) REFERENCES candidate_resumes(id) ON DELETE CASCADE,
+  INDEX (user_id),
+  INDEX (resume_id)
 );
 
 CREATE TABLE IF NOT EXISTS interview_sessions (
@@ -22,9 +73,12 @@ CREATE TABLE IF NOT EXISTS interview_sessions (
   current_question_index INT DEFAULT 0,
   status ENUM('in_progress', 'completed', 'abandoned') DEFAULT 'in_progress',
   overall_score DECIMAL(5, 2) DEFAULT NULL,
+  use_resume BOOLEAN DEFAULT TRUE,
+  resume_id INT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   completed_at TIMESTAMP NULL,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (resume_id) REFERENCES candidate_resumes(id) ON DELETE SET NULL,
   INDEX (user_id),
   INDEX (status)
 );
@@ -48,6 +102,7 @@ CREATE TABLE IF NOT EXISTS questions (
   question_text TEXT NOT NULL,
   question_type VARCHAR(50) DEFAULT 'technical',
   expected_points JSON NULL,
+  resume_reference VARCHAR(255) NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (session_id) REFERENCES interview_sessions(id) ON DELETE CASCADE,
   FOREIGN KEY (interview_id) REFERENCES interviews(id) ON DELETE CASCADE,

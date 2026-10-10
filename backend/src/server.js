@@ -5,6 +5,8 @@ import { pool, initDatabase } from './config/db.js';
 import authRoutes from './routes/auth.routes.js';
 import documentRoutes from './routes/document.routes.js';
 import interviewRoutes from './routes/interview.routes.js';
+import mcpRoutes from './routes/mcp.routes.js';
+import resumeRoutes from './routes/resume.routes.js';
 
 dotenv.config();
 
@@ -33,6 +35,8 @@ app.get('/api/health', async (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/interviews', interviewRoutes);
 app.use('/api/documents', documentRoutes);
+app.use('/api/resume', resumeRoutes);
+app.use('/mcp', mcpRoutes);
 
 app.use((error, req, res, next) => {
   return res.status(500).json({
